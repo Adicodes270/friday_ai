@@ -228,16 +228,107 @@ function deleteConversation(id) {
 }
 
 /**
+ * Creates a custom modal dialog
+ */
+function createModal(options) {
+    const { title, message, type = 'confirm', defaultValue = '', onConfirm, onCancel } = options;
+    
+    // Remove any existing modals
+    const existingModal = document.querySelector('.custom-modal-overlay');
+    if (existingModal) existingModal.remove();
+    
+    const overlay = document.createElement('div');
+    overlay.className = 'custom-modal-overlay';
+    overlay.innerHTML = `
+        <div class="custom-modal">
+            <div class="custom-modal-header">
+                <h3>${title}</h3>
+            </div>
+            <div class="custom-modal-body">
+                <p>${message}</p>
+                ${type === 'prompt' ? `<input type="text" class="custom-modal-input" value="${defaultValue}" placeholder="Enter text...">` : ''}
+            </div>
+            <div class="custom-modal-footer">
+                <button class="custom-modal-btn cancel-btn">Cancel</button>
+                <button class="custom-modal-btn confirm-btn">${type === 'alert' ? 'OK' : 'Confirm'}</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    
+    const modal = overlay.querySelector('.custom-modal');
+    const input = overlay.querySelector('.custom-modal-input');
+    const confirmBtn = overlay.querySelector('.confirm-btn');
+    const cancelBtn = overlay.querySelector('.cancel-btn');
+    
+    // Focus input if prompt type
+    if (input) {
+        input.focus();
+        input.select();
+    }
+    
+    // Animate in
+    setTimeout(() => {
+        overlay.classList.add('active');
+        modal.classList.add('active');
+    }, 10);
+    
+    const closeModal = (confirmed = false) => {
+        overlay.classList.remove('active');
+        modal.classList.remove('active');
+        setTimeout(() => overlay.remove(), 300);
+        
+        if (confirmed && onConfirm) {
+            if (type === 'prompt' && input) {
+                onConfirm(input.value.trim());
+            } else {
+                onConfirm();
+            }
+        } else if (!confirmed && onCancel) {
+            onCancel();
+        }
+    };
+    
+    confirmBtn.addEventListener('click', () => closeModal(true));
+    cancelBtn.addEventListener('click', () => closeModal(false));
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeModal(false);
+    });
+    
+    // Handle Enter key
+    if (input) {
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') closeModal(true);
+            if (e.key === 'Escape') closeModal(false);
+        });
+    }
+    
+    // Handle Escape key
+    document.addEventListener('keydown', function escHandler(e) {
+        if (e.key === 'Escape') {
+            closeModal(false);
+            document.removeEventListener('keydown', escHandler);
+        }
+    });
+}
+
+/**
  * Deletes all conversations
  */
 function deleteAllConversations() {
-    if (confirm('Delete all image generation conversations?')) {
-        conversations = [];
-        activeConversationId = null;
-        saveConversations();
-        renderConversations();
-        newChat();
-    }
+    createModal({
+        title: 'Delete All Conversations',
+        message: 'Are you sure you want to delete all image generation conversations? This action cannot be undone.',
+        type: 'confirm',
+        onConfirm: () => {
+            conversations = [];
+            activeConversationId = null;
+            saveConversations();
+            renderConversations();
+            newChat();
+        }
+    });
 }
 
 /**
@@ -246,13 +337,21 @@ function deleteAllConversations() {
 function renameConversation(id) {
     const convo = conversations.find(c => c.id === id);
     if (!convo) return;
-    const newTitle = prompt('Rename conversation:', convo.title);
-    if (newTitle && newTitle.trim()) {
-        convo.title = newTitle.trim();
-        convo.updatedAt = Date.now();
-        saveConversations();
-        renderConversations();
-    }
+    
+    createModal({
+        title: 'Rename Conversation',
+        message: 'Enter a new name for this conversation:',
+        type: 'prompt',
+        defaultValue: convo.title,
+        onConfirm: (newTitle) => {
+            if (newTitle) {
+                convo.title = newTitle;
+                convo.updatedAt = Date.now();
+                saveConversations();
+                renderConversations();
+            }
+        }
+    });
 }
 
 /**
@@ -444,10 +543,23 @@ function scrollToBottom() {
 /**
  * Downloads an image with proper filename.
  */
+/**
+ * Downloads an image with proper filename.
+ */
 async function downloadImage(imageUrl, filename = 'friday-ai-image.jpg') {
     try {
-        const response = await fetch(imageUrl);
-        const blob = await response.blob();
+        let blob;
+        if (imageUrl.startsWith('data:')) {
+            // Handle base64 URL
+            const response = await fetch(imageUrl);
+            blob = await response.blob();
+        } else {
+            // Handle regular URL (for backward compatibility or other cases)
+            const response = await fetch(imageUrl);
+            if (!response.ok) throw new Error('Failed to fetch image');
+            blob = await response.blob();
+        }
+
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -459,6 +571,7 @@ async function downloadImage(imageUrl, filename = 'friday-ai-image.jpg') {
         return true;
     } catch (error) {
         console.warn('Download failed:', error);
+        // Fallback to opening the image in a new tab
         const a = document.createElement('a');
         a.href = imageUrl;
         a.download = filename;
@@ -469,7 +582,6 @@ async function downloadImage(imageUrl, filename = 'friday-ai-image.jpg') {
         return true;
     }
 }
-
 /**
  * Adds a message to the chat container.
  */
@@ -618,7 +730,9 @@ function loadChatHistory() {
     }
     scrollToBottom();
 }
-
+/**
+ * Generates AI image using Hugging Face FLUX API.
+ */
 /**
  * Generates AI image using Hugging Face FLUX API.
  */
@@ -644,12 +758,17 @@ async function generateAIImage(prompt, signal) {
         }
 
         const blob = await response.blob();
-        const imageUrl = URL.createObjectURL(blob);
+        // Convert blob to base64
+        const base64 = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.readAsDataURL(blob);
+        });
         
         console.log('✓ AI image generated successfully');
         
         return {
-            url: imageUrl,
+            url: base64, // Return base64 string instead of Blob URL
             source: 'FLUX.1 AI',
             generated: true
         };
@@ -741,17 +860,17 @@ async function sendMessage(prompt) {
 
         // Display result
         if (imageData) {
-            const aiResponse = `
-                <img src="${imageData.url}" alt="${sanitizeInput(userText)}" style="max-width: 100%; border-radius: 8px;" loading="lazy">
-                <p style="font-size: 0.8em; color: #888; margin-top: 8px;">Generated by ${imageData.source}</p>
-            `;
+    const aiResponse = `
+        <img src="${imageData.url}" alt="${sanitizeInput(userText)}" style="max-width: 100%; border-radius: 8px;" loading="lazy">
+        <p style="font-size: 0.8em; color: #888; margin-top: 8px;">Generated by ${imageData.source}</p>
+    `;
 
-            chatHistory.push({ role: 'model', parts: [{ text: aiResponse }] });
-            localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
-            saveMessageToConversation('model', aiResponse);
-            typingIndicator.remove();
-            addMessage(aiResponse, 'model', true);
-        } else {
+    chatHistory.push({ role: 'model', parts: [{ text: aiResponse }] });
+    localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+    saveMessageToConversation('model', aiResponse);
+    typingIndicator.remove();
+    addMessage(aiResponse, 'model', true);
+} else {
             throw new Error('Failed to generate image. Please try again or rephrase your prompt.');
         }
     } catch (error) {
