@@ -25,15 +25,26 @@ let welcomeScreen;
 let inputArea;
 let newChatButton;
 let themeToggleButton;
+let homeButton;
+let menuToggle;
+let sidebar;
+let globalSearch;
+let newChatBtn;
+let clearAllBtn;
+let conversationsList;
 
 // State variables
 let chatHistory = [];
 let isGenerating = false;
 let stopTyping = false;
 let isRecording = false;
-let isDarkMode = document.cookie.includes('theme=dark');
+let isDarkMode = localStorage.getItem('friday_image_theme') === 'dark';
 let recognition = null;
 let abortController = null;
+
+// Conversation management
+let conversations = JSON.parse(localStorage.getItem('friday_image_conversations')) || [];
+let activeConversationId = localStorage.getItem('friday_image_active_conversation') || null;
 
 /** @constant {object} SpeechRecognition API */
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -66,8 +77,15 @@ document.addEventListener('DOMContentLoaded', () => {
     chatContainer = document.getElementById('chat-container');
     welcomeScreen = document.getElementById('welcome-screen');
     inputArea = document.getElementById('input-area');
-    newChatButton = document.getElementById('new-chat-button');
+    newChatButton = document.getElementById('newChat');
     themeToggleButton = document.getElementById('theme-toggle-button');
+    homeButton = document.getElementById('home');
+    menuToggle = document.getElementById('menu-toggle');
+    sidebar = document.querySelector('.sidebar');
+    globalSearch = document.getElementById('global-search');
+    newChatBtn = document.getElementById('new-chat-btn');
+    clearAllBtn = document.getElementById('clear-all-btn');
+    conversationsList = document.getElementById('conversations-list');
 
     // Load or initialize chat history
     const savedHistory = localStorage.getItem('imageChatHistory');
@@ -80,6 +98,13 @@ document.addEventListener('DOMContentLoaded', () => {
             parts: [{ text: "You are FRIDAY AI, a helpful AI assistant for generating images. Generate AI images based on user prompts." }]
         }];
         localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+    }
+
+    // Initialize conversations
+    if (!activeConversationId && conversations.length === 0) {
+        createConversation('New Chat');
+    } else if (activeConversationId) {
+        switchConversation(activeConversationId);
     }
 
     // Event listeners
@@ -99,11 +124,253 @@ document.addEventListener('DOMContentLoaded', () => {
     newChatButton.addEventListener('click', newChat);
     themeToggleButton.addEventListener('click', toggleTheme);
 
+    // Home button - navigate to index.html
+    if (homeButton) {
+        homeButton.addEventListener('click', () => {
+            window.location.href = 'index.html';
+        });
+    }
+
+    // Sidebar functionality
+    if (menuToggle && sidebar) {
+        menuToggle.addEventListener('click', () => {
+            sidebar.classList.toggle('active');
+            document.body.classList.toggle('sidebar-open');
+        });
+
+        // Close sidebar when clicking outside
+        document.addEventListener('click', (e) => {
+            if (
+                sidebar.classList.contains('active') &&
+                !sidebar.contains(e.target) &&
+                !menuToggle.contains(e.target)
+            ) {
+                sidebar.classList.remove('active');
+                document.body.classList.remove('sidebar-open');
+            }
+        });
+    }
+
+    // Search functionality
+    if (globalSearch) {
+        globalSearch.addEventListener('input', (e) => {
+            renderConversations(e.target.value);
+        });
+    }
+
+    // New chat button in sidebar
+    if (newChatBtn) {
+        newChatBtn.addEventListener('click', () => createConversation('New Image Chat'));
+    }
+
+    // Clear all button in sidebar
+    if (clearAllBtn) {
+        clearAllBtn.addEventListener('click', () => deleteAllConversations());
+    }
+
+    // Quick prompts
+    initQuickPrompts();
+
     // Initialize UI
     checkInput();
     updateTheme();
     adjustTextareaHeight();
+    renderConversations();
 });
+
+/**
+ * Generates a unique conversation ID
+ */
+function generateId() {
+    return 'img-convo-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+}
+
+/**
+ * Saves conversations to localStorage
+ */
+function saveConversations() {
+    localStorage.setItem('friday_image_conversations', JSON.stringify(conversations));
+    localStorage.setItem('friday_image_active_conversation', activeConversationId);
+}
+
+/**
+ * Creates a new conversation
+ */
+function createConversation(title = 'New Image Chat') {
+    const newConvo = {
+        id: generateId(),
+        title,
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    };
+    conversations.unshift(newConvo);
+    activeConversationId = newConvo.id;
+    saveConversations();
+    renderConversations();
+}
+
+/**
+ * Deletes a conversation
+ */
+function deleteConversation(id) {
+    conversations = conversations.filter(c => c.id !== id);
+    if (activeConversationId === id) {
+        activeConversationId = conversations[0]?.id || null;
+    }
+    saveConversations();
+    renderConversations();
+    if (activeConversationId) {
+        switchConversation(activeConversationId);
+    } else {
+        newChat();
+    }
+}
+
+/**
+ * Deletes all conversations
+ */
+function deleteAllConversations() {
+    if (confirm('Delete all image generation conversations?')) {
+        conversations = [];
+        activeConversationId = null;
+        saveConversations();
+        renderConversations();
+        newChat();
+    }
+}
+
+/**
+ * Renames a conversation
+ */
+function renameConversation(id) {
+    const convo = conversations.find(c => c.id === id);
+    if (!convo) return;
+    const newTitle = prompt('Rename conversation:', convo.title);
+    if (newTitle && newTitle.trim()) {
+        convo.title = newTitle.trim();
+        convo.updatedAt = Date.now();
+        saveConversations();
+        renderConversations();
+    }
+}
+
+/**
+ * Switches to a different conversation
+ */
+function switchConversation(id) {
+    activeConversationId = id;
+    saveConversations();
+    renderConversations();
+    const convo = conversations.find(c => c.id === id);
+    if (convo) {
+        chatHistory = convo.messages.length > 0
+            ? convo.messages
+            : [{
+                role: 'model',
+                parts: [{ text: "You are FRIDAY AI, a helpful AI assistant for generating images." }]
+            }];
+        localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+        loadChatHistory();
+    }
+}
+
+/**
+ * Saves a message to the active conversation
+ */
+function saveMessageToConversation(role, text) {
+    const convo = conversations.find(c => c.id === activeConversationId);
+    if (!convo) return;
+    convo.messages.push({ role, parts: [{ text }] });
+    convo.updatedAt = Date.now();
+    saveConversations();
+}
+
+/**
+ * Renders the conversations list
+ */
+function renderConversations(filter = '') {
+    if (!conversationsList) return;
+
+    conversationsList.innerHTML = '';
+
+    const filtered = filter
+        ? conversations.filter(c => c.title.toLowerCase().includes(filter.toLowerCase()))
+        : conversations;
+
+    filtered.forEach(convo => {
+        const div = document.createElement('div');
+        div.className = 'conversation-item' + (convo.id === activeConversationId ? ' active' : '');
+        div.innerHTML = `
+            <div class="conversation-title">
+                <span>${convo.title}</span>
+                <div class="conversation-actions" style="display: flex; gap: 0.25rem;">
+                    <button class="icon-btn small" data-action="rename" title="Rename" style="width: 1.5rem; height: 1.5rem; font-size: 0.7rem;">
+                        <i class="fa-solid fa-pen"></i>
+                    </button>
+                    <button class="icon-btn small" data-action="delete" title="Delete" style="width: 1.5rem; height: 1.5rem; font-size: 0.7rem;">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="conversation-meta">
+                ${convo.messages.length} messages
+            </div>
+        `;
+
+        div.addEventListener('click', e => {
+            if (e.target.closest('.conversation-actions')) return;
+            switchConversation(convo.id);
+        });
+
+        const renameBtn = div.querySelector('[data-action="rename"]');
+        const deleteBtn = div.querySelector('[data-action="delete"]');
+
+        if (renameBtn) {
+            renameBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                renameConversation(convo.id);
+            });
+        }
+
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                deleteConversation(convo.id);
+            });
+        }
+
+        conversationsList.appendChild(div);
+    });
+}
+
+/**
+ * Initializes quick prompt buttons
+ */
+function initQuickPrompts() {
+    const quickPromptButtons = document.querySelectorAll('.quick-prompt-btn');
+    quickPromptButtons.forEach(btn => {
+        const promptText = btn.dataset.prompt || btn.textContent.trim();
+        btn.addEventListener('click', () => handleQuickPromptClick(promptText));
+        btn.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleQuickPromptClick(promptText);
+            }
+        });
+    });
+}
+
+/**
+ * Handles quick prompt button clicks
+ */
+function handleQuickPromptClick(promptText) {
+    if (!promptText) return;
+    if (!activeConversationId) createConversation('New Image Chat');
+    userPrompt.value = promptText + ': ';
+    adjustTextareaHeight();
+    userPrompt.focus();
+}
 
 /**
  * Sets a cookie.
@@ -419,7 +686,7 @@ async function refineAIPrompt(userText, signal) {
         return data.candidates[0].content.parts[0].text.trim();
     } catch (error) {
         console.warn('Prompt refinement failed, using original:', error);
-        return userText; // Fallback to original prompt
+        return userText;
     }
 }
 
@@ -436,6 +703,7 @@ async function sendMessage(prompt) {
     stopButton.classList.add('enabled');
 
     addMessage(sanitizeInput(userText), 'user', true);
+    saveMessageToConversation('user', userText);
     userPrompt.value = '';
     adjustTextareaHeight();
     checkInput();
@@ -455,6 +723,7 @@ async function sendMessage(prompt) {
             const aiResponse = matchedRule.response;
             chatHistory.push({ role: 'model', parts: [{ text: aiResponse }] });
             localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+            saveMessageToConversation('model', aiResponse);
             typingIndicator.remove();
             const { contentDiv } = addMessage('', 'model', false);
             await typeStream(contentDiv, aiResponse);
@@ -479,6 +748,7 @@ async function sendMessage(prompt) {
 
             chatHistory.push({ role: 'model', parts: [{ text: aiResponse }] });
             localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+            saveMessageToConversation('model', aiResponse);
             typingIndicator.remove();
             addMessage(aiResponse, 'model', true);
         } else {
@@ -496,6 +766,7 @@ async function sendMessage(prompt) {
         addMessage(errorMessage, 'model', true);
         chatHistory.push({ role: 'model', parts: [{ text: errorMessage }] });
         localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+        saveMessageToConversation('model', errorMessage);
     } finally {
         isGenerating = false;
         stopButton.disabled = true;
@@ -582,6 +853,7 @@ function newChat() {
         parts: [{ text: "You are FRIDAY AI, a helpful AI assistant for generating images." }]
     }];
     localStorage.setItem('imageChatHistory', JSON.stringify(chatHistory));
+    createConversation('New Image Chat');
     loadChatHistory();
 }
 
@@ -590,7 +862,7 @@ function newChat() {
  */
 function toggleTheme() {
     isDarkMode = !isDarkMode;
-    setCookie('theme', isDarkMode ? 'dark' : 'light');
+    localStorage.setItem('friday_image_theme', isDarkMode ? 'dark' : 'light');
     updateTheme();
 }
 
