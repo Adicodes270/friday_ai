@@ -13,7 +13,7 @@ const GEMINI_MODEL = "gemini-2.5-flash-preview-05-20";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
 /** @constant {string} Hugging Face API key */
-const HUGGINGFACE_API_KEY = "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";
+const HUGGINGFACE_API_KEY = process.env.HUGGINGFACE_API_KEY;
 
 // DOM elements
 let userPrompt;
